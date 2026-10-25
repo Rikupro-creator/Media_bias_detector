@@ -1,0 +1,64 @@
+# ==========================================
+# Dissertation Documents & Word Files (Do NOT upload before marking)
+# ==========================================
+*[Dd]issertation*.docx
+*[Dd]ISSERTATION*.docx
+*.docx
+
+# ==========================================
+# Python Virtual Environments & Caches
+# ==========================================
+mydiss/
+mydiss1/
+venv/
+.venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# ==========================================
+# General Data Files (.csv, .parquet, .jsonl)
+# ==========================================
+*.csv
+*.parquet
+*.jsonl
+progress.json
+
+# ==========================================
+# Explicitly Tracked Data & Notebook Artifacts
+# ==========================================
+!kenyan_news_political_classified1.csv
+!kenyan_news_political_classified1.parquet
+!media-bias-continued (1).ipynb
+!media-bias-continued (2).ipynb
+!mediabias1 (5).ipynb
+
+# ==========================================
+# Temporary, Lock & Backup Files
+# ==========================================
+.~lock.*#
+~$*.docx
+*.tmp
+*.bak
+*.log
+
+# ==========================================
+# Obsolete / Redundant Scratch Files
+# ==========================================
+verifier.py
+final_dataset.py
+cleaner.py
+analysis.py
+conver.py
+testings.ipynb
+
+# ==========================================
+# OS & IDE Specific Files
+# ==========================================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+.ipynb_checkpoints/
