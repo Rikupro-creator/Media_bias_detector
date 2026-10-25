@@ -1,4 +1,3 @@
-
 import time
 from pathlib import Path
 
@@ -64,6 +63,41 @@ Police officers arrived shortly thereafter to disperse the crowd and restore ord
 
 
 # -----------------------------------------------------------------------------
+# TOKEN VALIDATION
+# -----------------------------------------------------------------------------
+def _clean_token(token: str) -> str:
+    """Strip whitespace and common paste artifacts from a user-supplied token."""
+    if token is None:
+        return ""
+    return str(token).strip().strip('"').strip("'").replace("\r", "").replace("\n", "")
+
+
+def validate_hf_token(token: str) -> tuple[bool, str]:
+    """
+    Validate a Hugging Face token by calling whoami().
+    Returns (is_valid, message).
+    """
+    token = _clean_token(token)
+    if not token:
+        return False, "Token is empty."
+    if not token.startswith("hf_"):
+        return False, "Token does not look like a Hugging Face token (should start with 'hf_')."
+
+    try:
+        from huggingface_hub import HfApi
+    except ImportError:
+        # Cannot validate without huggingface_hub; let the downstream call surface the error.
+        return True, "huggingface_hub not installed; skipping pre-validation."
+
+    try:
+        info = HfApi(token=token).whoami()
+        username = info.get("name") or info.get("fullname") or "unknown user"
+        return True, f"Token valid (authenticated as `{username}`)."
+    except Exception as exc:
+        return False, f"Token rejected by Hugging Face: {type(exc).__name__}: {exc}"
+
+
+# -----------------------------------------------------------------------------
 # DATASET LOADING
 # -----------------------------------------------------------------------------
 @st.cache_data(show_spinner="Loading test dataset...")
@@ -116,7 +150,6 @@ def parse_prediction(response_text: str):
 
     text = (response_text or "").strip()
 
-    # Expected output: bias_classification: biased / not_biased
     match = re.search(
         r"bias_classification\s*['\"]?\s*[:=]\s*['\"]?\s*(not[\s_-]*biased|biased)\b",
         text,
@@ -126,7 +159,6 @@ def parse_prediction(response_text: str):
         raw_label = match.group(1).lower().replace("-", "_").replace(" ", "_")
         classification = "not_biased" if raw_label in {"not_biased", "not biased"} else "biased"
     else:
-        # Support a bare label only when the response is essentially just that label.
         bare = re.fullmatch(r"\s*(not[\s_-]*biased|biased)[.!]?\s*", text, flags=re.IGNORECASE)
         if bare:
             raw_label = bare.group(1).lower().replace("-", "_").replace(" ", "_")
@@ -157,10 +189,10 @@ def load_local_model(model_id: str, hf_token: str, load_in_4bit: bool = False, d
             "for 4-bit loading also install bitsandbytes."
         ) from exc
 
-    if not hf_token or not hf_token.strip():
+    token = _clean_token(hf_token)
+    if not token:
         raise ValueError("Enter your Hugging Face token in the sidebar.")
 
-    token = hf_token.strip()
     tokenizer = AutoTokenizer.from_pretrained(
         model_id,
         token=token,
@@ -213,12 +245,17 @@ def query_hf_api(article_text: str, model_id: str, hf_token: str, max_tokens: in
             "Install huggingface_hub with: pip install -U huggingface_hub"
         ) from exc
 
-    token = (hf_token or "").strip()
+    token = _clean_token(hf_token)
     if not token:
         raise ValueError("Enter your Hugging Face token in the sidebar.")
 
+    # Pass token explicitly. Passing it as a keyword argument ensures the client
+    # uses it rather than any ambient credentials (HF_TOKEN env var, cached login, etc.).
     client = InferenceClient(model=model_id, token=token)
-    return client.text_generation(
+
+    # InferenceClient.text_generation returns a plain string in recent
+    # huggingface_hub versions. Handle both str and object forms defensively.
+    result = client.text_generation(
         article_text,
         max_new_tokens=max_tokens,
         temperature=temperature if temperature > 0 else None,
@@ -226,6 +263,10 @@ def query_hf_api(article_text: str, model_id: str, hf_token: str, max_tokens: in
         do_sample=temperature > 0,
         return_full_text=False,
     )
+    if isinstance(result, str):
+        return result
+    # Fallback for older client versions that return an object with .generated_text
+    return getattr(result, "generated_text", str(result))
 
 
 def query_local_transformers(article_text: str, tokenizer, model, max_tokens: int, temperature: float, top_p: float):
@@ -239,7 +280,6 @@ def query_local_transformers(article_text: str, tokenizer, model, max_tokens: in
         max_length=2048,
     )
 
-    # For sharded/device_map='auto' models, input embeddings' device is the safest target.
     input_device = model.get_input_embeddings().weight.device
     inputs = {key: value.to(input_device) for key, value in inputs.items()}
 
@@ -275,14 +315,25 @@ if model_option == "Custom HuggingFace Model ID":
 else:
     model_id = model_option
 
-hf_token = st.sidebar.text_input(
+hf_token_raw = st.sidebar.text_input(
     "Hugging Face API Token (required)",
     value="",
     type="password",
     help="Enter a token with read access to the private model repository. The app does not read tokens from secrets or environment variables.",
-).strip()
+)
+hf_token = _clean_token(hf_token_raw)
 
 st.sidebar.caption("Token is supplied manually for this app session; it is not loaded from environment variables or Streamlit secrets.")
+
+# Token status indicator and validation
+if hf_token:
+    token_ok, token_msg = validate_hf_token(hf_token)
+    if token_ok:
+        st.sidebar.success(f"🔐 {token_msg}")
+    else:
+        st.sidebar.error(f"❌ {token_msg}")
+    # Show a diagnostic (length only — never the token itself)
+    st.sidebar.caption(f"Token length: {len(hf_token)} | Starts with: `{hf_token[:3]}...`")
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔌 Backend Execution Mode")
@@ -365,7 +416,6 @@ if input_mode.startswith("📁 Browse Test Dataset"):
         cols = list(test_df.columns)
         text_cols = [c for c in cols if any(k in c.lower() for k in ("article", "text", "body", "content"))]
         title_cols = [c for c in cols if any(k in c.lower() for k in ("title", "headline"))]
-        # Prefer a specific known bias-label column rather than the first column containing "label".
         truth_candidates = [
             c for c in cols
             if c.lower() in {"bias_classification", "bias_label", "ground_truth", "true_label", "label"}
@@ -442,6 +492,7 @@ with col_output:
     st.markdown("### 📋 Prediction Output")
 
     if run_button:
+        # --- Pre-flight checks ---
         if not hf_token:
             st.error("Enter your Hugging Face token in the sidebar before running inference.")
         elif not model_id:
@@ -449,71 +500,94 @@ with col_output:
         elif not article_text.strip():
             st.warning("Please provide article text to analyze.")
         else:
-            with st.spinner("Running model inference..."):
-                started = time.time()
-                raw_response = ""
-                error_msg = None
-
-                try:
-                    if backend_choice == "Hugging Face API (Cloud)":
-                        raw_response = query_hf_api(
-                            article_text=article_text.strip(),
-                            model_id=model_id,
-                            hf_token=hf_token,
-                            max_tokens=max_tokens,
-                            temperature=temperature,
-                            top_p=top_p,
-                        )
-                    else:
-                        tokenizer, model = load_local_model(
-                            model_id=model_id,
-                            hf_token=hf_token,
-                            load_in_4bit=load_in_4bit,
-                            device_choice=device_choice,
-                        )
-                        raw_response = query_local_transformers(
-                            article_text=article_text.strip(),
-                            tokenizer=tokenizer,
-                            model=model,
-                            max_tokens=max_tokens,
-                            temperature=temperature,
-                            top_p=top_p,
-                        )
-                except Exception as exc:
-                    error_msg = f"{type(exc).__name__}: {exc}"
-
-                elapsed = time.time() - started
-
-            if error_msg:
-                st.error(f"Inference failed: {error_msg}")
+            # Validate token against the Hub before attempting inference.
+            token_ok, token_msg = validate_hf_token(hf_token)
+            if not token_ok:
+                st.error(f"🔑 Token check failed: {token_msg}")
                 st.info(
-                    "If the repository is accessible but cloud inference fails, the selected model may not be available "
-                    "through the configured inference provider. Try Local Transformers, or check the provider's support "
-                    "and token permissions. The app does not print or display your token."
+                    "Common causes:\n"
+                    "1. The token was pasted with extra characters or line breaks.\n"
+                    "2. The token has expired or was revoked.\n"
+                    "3. The token type (read-only vs. fine-grained) cannot access this repository.\n"
+                    "4. The repository is gated and your account has not accepted its terms.\n\n"
+                    "Regenerate the token at https://huggingface.co/settings/tokens and paste it again."
                 )
             else:
-                classification, reason = parse_prediction(raw_response)
+                with st.spinner("Running model inference..."):
+                    started = time.time()
+                    raw_response = ""
+                    error_msg = None
 
-                if classification == "biased":
-                    st.error("### 🔴 Result: BIASED")
-                elif classification == "not_biased":
-                    st.success("### 🟢 Result: NOT BIASED")
-                else:
-                    st.warning("### ⚠️ Result: UNPARSED / OTHER")
+                    try:
+                        if backend_choice == "Hugging Face API (Cloud)":
+                            raw_response = query_hf_api(
+                                article_text=article_text.strip(),
+                                model_id=model_id,
+                                hf_token=hf_token,
+                                max_tokens=max_tokens,
+                                temperature=temperature,
+                                top_p=top_p,
+                            )
+                        else:
+                            tokenizer, model = load_local_model(
+                                model_id=model_id,
+                                hf_token=hf_token,
+                                load_in_4bit=load_in_4bit,
+                                device_choice=device_choice,
+                            )
+                            raw_response = query_local_transformers(
+                                article_text=article_text.strip(),
+                                tokenizer=tokenizer,
+                                model=model,
+                                max_tokens=max_tokens,
+                                temperature=temperature,
+                                top_p=top_p,
+                            )
+                    except Exception as exc:
+                        error_msg = f"{type(exc).__name__}: {exc}"
 
-                if normalized_truth is not None:
-                    if classification == normalized_truth:
-                        st.success(f"Prediction matches dataset ground truth (`{ground_truth_label}`).")
-                    else:
-                        st.warning(
-                            f"Prediction (`{classification}`) differs from ground truth (`{ground_truth_label}`)."
+                    elapsed = time.time() - started
+
+                if error_msg:
+                    st.error(f"Inference failed: {error_msg}")
+                    if "401" in error_msg or "RepositoryNotFound" in error_msg or "not found" in error_msg.lower():
+                        st.info(
+                            "This is an authentication or access error, not a model-output error. Check:\n\n"
+                            "1. **Token validity** — run the test in the sidebar; it must show a green check.\n"
+                            "2. **Repository access** — the token's account must have read access to "
+                            f"`{model_id}`. If the repo is private or gated, visit "
+                            f"https://huggingface.co/{model_id} while logged in and accept any terms.\n"
+                            "3. **Token type** — a *fine-grained* token may be scoped to specific repos. "
+                            "A *read* token covers all public/authorized repos.\n"
+                            "4. **Inference provider** — the model may not be available through the "
+                            "Hugging Face inference API even if the repo is readable. Try "
+                            "'Local Transformers (PyTorch)' instead.\n"
+                            "5. **Deployment secrets** — if running on Streamlit Community Cloud, the token "
+                            "entered in the sidebar is used; the app does not read from Secrets or env vars."
                         )
+                else:
+                    classification, reason = parse_prediction(raw_response)
 
-                st.markdown(f"**Article:** {article_title or '(untitled)'}")
-                st.markdown(f"**Classification:** `{classification}`")
-                st.markdown("**Reasoning / Evidence:**")
-                st.info(reason if reason else "No reasoning extracted.")
-                st.caption(f"Inference completed in **{elapsed:.2f} seconds**")
+                    if classification == "biased":
+                        st.error("### 🔴 Result: BIASED")
+                    elif classification == "not_biased":
+                        st.success("### 🟢 Result: NOT BIASED")
+                    else:
+                        st.warning("### ⚠️ Result: UNPARSED / OTHER")
 
-                with st.expander("🔍 View Raw Model Output"):
-                    st.code(raw_response)
+                    if normalized_truth is not None:
+                        if classification == normalized_truth:
+                            st.success(f"Prediction matches dataset ground truth (`{ground_truth_label}`).")
+                        else:
+                            st.warning(
+                                f"Prediction (`{classification}`) differs from ground truth (`{ground_truth_label}`)."
+                            )
+
+                    st.markdown(f"**Article:** {article_title or '(untitled)'}")
+                    st.markdown(f"**Classification:** `{classification}`")
+                    st.markdown("**Reasoning / Evidence:**")
+                    st.info(reason if reason else "No reasoning extracted.")
+                    st.caption(f"Inference completed in **{elapsed:.2f} seconds**")
+
+                    with st.expander("🔍 View Raw Model Output"):
+                        st.code(raw_response)
