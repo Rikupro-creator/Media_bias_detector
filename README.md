@@ -4,59 +4,6 @@ This repository contains the full end-to-end data engineering, machine learning 
 
 ---
 
-## 🖥️ Streamlit Test Application (`app.py`)
-
-An interactive Streamlit application (`app.py`) is provided for evaluating fine-tuned Hugging Face models trained on Kenyan political news media bias detection.
-
-### Key Features
-- **Test Dataset Article Browser (`test_media_bias.csv`)**: Hardcoded to load and test articles from `test_media_bias.csv` one by one, displaying article details, model predictions, evidence reasoning, and comparison with ground-truth labels.
-- **Custom Text Input**: Option for users to paste or type any custom news article text to run real-time bias inference.
-- **Structured Prediction Parsing**: Automatically parses model output into `bias_classification` (`biased` vs `not_biased`) and `bias_reason`.
-- **Dual Inference Engine Support**:
-  - **⚡ Hugging Face API (Cloud)**: Serverless fast inference using `huggingface_hub.InferenceClient` (no local GPU required).
-  - **💻 Local PyTorch Transformers**: Loads model weights locally (`transformers`, `torch`) with optional 4-bit quantization.
-
----
-
-### 📦 Pre-configured Hugging Face Models
-The app includes pre-loaded references to fine-tuned model repositories:
-- `Mriku/kenyan-media-bias-qwen-continued1` *(Default)*
-- `Mriku/kenyan-media-bias-qwen-continued`
-- `Mriku/kenyan-media-bias-qwen`
-- *Custom HuggingFace Model ID* (User-specifiable repository ID)
-
----
-
-### 🔒 Setting Up Hugging Face Secrets / Tokens
-
-For private Hugging Face repositories or restricted Inference API access, the application automatically resolves your Hugging Face Access Token (`hf_...`) in priority order:
-
-1. **Manual Sidebar Input**: Type your token directly into the sidebar password field.
-2. **Streamlit Secrets (`st.secrets`)**: Automatically reads from `.streamlit/secrets.toml` or platform secrets.
-3. **Environment Variables**: Reads `HF_TOKEN`, `HUGGINGFACE_API_KEY`, or `HUGGINGFACE_TOKEN`.
-
-#### Local Secrets Configuration (`.streamlit/secrets.toml`)
-Create a `.streamlit/secrets.toml` file in the project root:
-```toml
-HF_TOKEN = "hf_your_huggingface_access_token_here"
-```
-
----
-
-### 🚀 Running the Streamlit App
-
-1. Install all project dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-2. Run the Streamlit app:
-   ```bash
-   streamlit run app.py
-   ```
-
----
-
 ## 🏗️ Architecture & Pipeline Overview
 
 The project is structured into **6 key phases**:
@@ -64,7 +11,7 @@ The project is structured into **6 key phases**:
 ```
 [1. Scraping] ──> [2. Text Extraction] ──> [3. Political Classification]
                                                         │
-[6. Streamlit & HF Models] <── [5. Gemini Judge Verification] <── [4. Bias Framing Annotation]
+[6. Model Fine-Tuning & HF] <── [5. Gemini Judge Verification] <── [4. Bias Framing Annotation]
 ```
 
 1. **Scraping & Aggregation:** Harvesting article links across leading Kenyan news outlets via KenyaMoja.
@@ -72,18 +19,17 @@ The project is structured into **6 key phases**:
 3. **Political Relevance Filtering:** Zero-shot classification using `gpt-5.6-luna` to isolate political news articles.
 4. **Media Bias Framing Annotation:** Detailed evidence-based media bias framing analysis via `gpt-5.6-luna`.
 5. **Independent Judge Verification:** Secondary evaluation using `gemini-3.1-flash-lite` to calculate inter-model agreement metrics (Cohen's Kappa, PABAK, Bootstrap CIs).
-6. **Model Fine-Tuning & Deployment:** Fine-tuning Qwen 2.5 3B Instruct on Kaggle, uploading model weights to Hugging Face, and interactive testing via Streamlit.
+6. **Model Fine-Tuning & Deployment:** Fine-tuning Qwen 2.5 3B Instruct on Kaggle and uploading model weights to Hugging Face.
 
 ---
 
 ## 📜 File-by-File Inventory
 
-### 1. Interactive Applications & Web Testers
+### 1. Project Configuration & Dependencies
 
 | File | Type | Description | Inputs | Outputs / Artifacts |
 |---|---|---|---|---|
-| `app.py` | Streamlit App | Interactive UI for evaluating fine-tuned Hugging Face models (`Mriku/kenyan-media-bias-qwen-continued1`). Hardcoded to browse `test_media_bias.csv` articles one by one or test custom article text. Supports cloud API and local PyTorch inference. | `test_media_bias.csv` / Custom text | Interactive predictions, bias badges, reasoning |
-| `requirements.txt` | Configuration | Master Python dependencies file listing all libraries required for running the web scraper, classifiers, judge verifier, report generator, and Streamlit app. | - | - |
+| `requirements.txt` | Configuration | Master Python dependencies file listing all libraries required for running the web scraper, classifiers, judge verifier, and report generator. | - | - |
 
 ---
 
