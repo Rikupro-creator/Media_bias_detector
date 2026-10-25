@@ -1,4 +1,7 @@
+
 import time
+from pathlib import Path
+
 import pandas as pd
 import streamlit as st
 
@@ -14,6 +17,16 @@ st.set_page_config(
 
 PRIMARY_TEST_DATASET = "test_media_bias.csv"
 FALLBACK_TEST_DATASET = "kenyan_news_political_classified1.csv"
+
+# Anchor all dataset lookups to the directory containing this script, not the CWD.
+APP_DIR = Path(__file__).resolve().parent
+
+
+def _resolve_path(filename: str) -> Path:
+    """Resolve a filename relative to the app directory unless it is absolute."""
+    p = Path(filename)
+    return p if p.is_absolute() else (APP_DIR / p)
+
 
 MODEL_OPTIONS = [
     "Mriku/kenyan-media-bias-qwen-continued1",
@@ -55,25 +68,30 @@ Police officers arrived shortly thereafter to disperse the crowd and restore ord
 # -----------------------------------------------------------------------------
 @st.cache_data(show_spinner="Loading test dataset...")
 def load_test_dataset(filename: str):
-    if filename.endswith(".parquet"):
+    """
+    Load the requested dataset, falling back to FALLBACK_TEST_DATASET if the
+    primary cannot be found. Paths are resolved relative to the app directory
+    (APP_DIR) so this works regardless of the process working directory.
+
+    Returns (dataframe, resolved_path_str) or (None, None).
+    """
+    if filename and filename.endswith(".parquet"):
         reader = pd.read_parquet
     else:
         reader = pd.read_csv
 
-    if filename:
-        try:
-            import os
-            if os.path.exists(filename):
-                return reader(filename), filename
-        except Exception:
-            pass
-
-    try:
-        import os
-        if os.path.exists(FALLBACK_TEST_DATASET):
-            return pd.read_csv(FALLBACK_TEST_DATASET), FALLBACK_TEST_DATASET
-    except Exception:
-        pass
+    candidates = [filename, FALLBACK_TEST_DATASET]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = _resolve_path(candidate)
+        if path.exists() and path.is_file():
+            try:
+                df = reader(path)
+                return df, str(path)
+            except Exception as exc:
+                st.warning(f"Found `{path}` but failed to read it: {exc}")
+                continue
 
     return None, None
 
@@ -322,19 +340,27 @@ default_title = ""
 default_text = ""
 ground_truth_label = None
 
-test_df, loaded_filename = load_test_dataset(PRIMARY_TEST_DATASET)
+test_df, loaded_path = load_test_dataset(PRIMARY_TEST_DATASET)
 
 if input_mode.startswith("📁 Browse Test Dataset"):
     if test_df is None or test_df.empty:
         st.warning(
             f"Could not locate `{PRIMARY_TEST_DATASET}` or `{FALLBACK_TEST_DATASET}` "
-            "in the current project folder. Add one of these CSV files and rerun the app."
+            f"in the app directory: `{APP_DIR}`. Add one of these CSV files there and rerun the app."
         )
+        with st.expander("🔎 Diagnostics"):
+            st.write("**App directory:**", str(APP_DIR))
+            try:
+                st.write("**Files found in app directory:**")
+                st.code("\n".join(sorted(p.name for p in APP_DIR.iterdir())))
+            except Exception as exc:
+                st.write(f"Could not list app directory: {exc}")
     else:
-        if loaded_filename != PRIMARY_TEST_DATASET:
-            st.info(f"Using fallback dataset `{loaded_filename}`.")
+        loaded_name = Path(loaded_path).name if loaded_path else "unknown"
+        if loaded_name != PRIMARY_TEST_DATASET:
+            st.info(f"Using fallback dataset `{loaded_name}` ({loaded_path}).")
         else:
-            st.success(f"Loaded `{loaded_filename}` ({len(test_df):,} rows).")
+            st.success(f"Loaded `{loaded_name}` ({len(test_df):,} rows) from `{loaded_path}`.")
 
         cols = list(test_df.columns)
         text_cols = [c for c in cols if any(k in c.lower() for k in ("article", "text", "body", "content"))]
